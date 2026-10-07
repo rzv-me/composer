@@ -181,6 +181,91 @@ class RepositorySet
     }
 
     /**
+     * @internal
+     * @param array<string, ConstraintInterface|null> $packageNameMap
+     * @return \Generator<string, BasePackage[]>
+     */
+    public function findPackagesForNames(array $packageNameMap): \Generator
+    {
+        $packages = [];
+        foreach ($this->repositories as $repoIndex => $repository) {
+            if ($packageNameMap === []) {
+                break;
+            }
+
+            self::prefetchVcsRepositories(array_slice($this->repositories, $repoIndex), $packageNameMap);
+            if ($repository instanceof PrefetchableRepositoryInterface) {
+                $repository->prefetchPackages($packageNameMap, $this->acceptableStabilities, $this->stabilityFlags, true);
+            }
+            foreach ($packageNameMap as $name => $constraint) {
+                $result = $repository->loadPackages([$name => $constraint], $this->acceptableStabilities, $this->stabilityFlags);
+                $packages[$name] = array_merge($packages[$name] ?? [], $result['packages']);
+                $found = in_array($name, $result['namesFound'], true);
+                unset($result);
+                if ($found) {
+                    unset($packageNameMap[$name]);
+                    yield $name => $packages[$name];
+                    unset($packages[$name]);
+                }
+            }
+        }
+
+        foreach ($packageNameMap as $name => $constraint) {
+            yield $name => $packages[$name] ?? [];
+            unset($packages[$name]);
+        }
+    }
+
+    /**
+     * Prefetch consecutive VCS repositories starting at the current loading position.
+     *
+     * @internal
+     * @param RepositoryInterface[] $repositories
+     * @param array<string, ConstraintInterface|null> $packageNameMap
+     */
+    public static function prefetchVcsRepositories(array $repositories, array $packageNameMap): void
+    {
+        if ($packageNameMap === []) {
+            return;
+        }
+
+        foreach ($repositories as $repository) {
+            $unwrappedRepository = $repository;
+            while ($unwrappedRepository instanceof FilterRepository) {
+                $unwrappedRepository = $unwrappedRepository->getRepository();
+            }
+            if (!$unwrappedRepository instanceof VcsRepository) {
+                break;
+            }
+            if ($repository instanceof FilterRepository) {
+                $repository->prefetchVcsPackages($packageNameMap);
+            } else {
+                $unwrappedRepository->prefetchPackages($packageNameMap);
+            }
+        }
+    }
+
+    /**
+     * @internal
+     * @param array<string, ConstraintInterface|null> $packageNameMap
+     */
+    public function prefetchPackages(array $packageNameMap): void
+    {
+        foreach ($this->repositories as $repository) {
+            if ($packageNameMap === [] || !$repository instanceof PrefetchableRepositoryInterface) {
+                break;
+            }
+            $names = $repository->prefetchPackages($packageNameMap, $this->acceptableStabilities, $this->stabilityFlags);
+            if ($names === null) {
+                break;
+            }
+            foreach ($names as $name) {
+                unset($packageNameMap[$name]);
+            }
+        }
+    }
+
+    /**
      * Find packages providing or matching a name and optionally meeting a constraint in all repositories
      *
      * Returned in the order of repositories, matching priority
@@ -195,11 +280,13 @@ class RepositorySet
 
         $packages = [];
         if ($loadFromAllRepos) {
-            foreach ($this->repositories as $repository) {
+            foreach ($this->repositories as $repoIndex => $repository) {
+                self::prefetchVcsRepositories(array_slice($this->repositories, $repoIndex), [$name => $constraint]);
                 $packages[] = $repository->findPackages($name, $constraint) ?: [];
             }
         } else {
-            foreach ($this->repositories as $repository) {
+            foreach ($this->repositories as $repoIndex => $repository) {
+                self::prefetchVcsRepositories(array_slice($this->repositories, $repoIndex), [$name => $constraint]);
                 $result = $repository->loadPackages([$name => $constraint], $ignoreStability ? BasePackage::STABILITIES : $this->acceptableStabilities, $ignoreStability ? [] : $this->stabilityFlags);
 
                 $packages[] = $result['packages'];

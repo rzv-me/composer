@@ -24,7 +24,9 @@ use Composer\Pcre\Preg;
 use Composer\Plugin\PluginEvents;
 use Composer\Plugin\PrePoolCreateEvent;
 use Composer\Repository\PlatformRepository;
+use Composer\Repository\PrefetchableRepositoryInterface;
 use Composer\Repository\RepositoryInterface;
+use Composer\Repository\RepositorySet;
 use Composer\Repository\RootPackageRepository;
 use Composer\Semver\CompilingMatcher;
 use Composer\Semver\Constraint\Constraint;
@@ -454,7 +456,14 @@ class PoolBuilder
                 break;
             }
 
+            RepositorySet::prefetchVcsRepositories(array_slice($repositories, $repoIndex), array_merge(...$packageBatches));
             foreach ($packageBatches as $batchIndex => $packageBatch) {
+                if ($repository instanceof PrefetchableRepositoryInterface) {
+                    $repository->prefetchPackages($packageBatch, $this->acceptableStabilities, $this->stabilityFlags);
+                    if (isset($packageBatches[$batchIndex + 1])) {
+                        $repository->prefetchPackages($packageBatches[$batchIndex + 1], $this->acceptableStabilities, $this->stabilityFlags);
+                    }
+                }
                 $result = $repository->loadPackages($packageBatch, $this->acceptableStabilities, $this->stabilityFlags, $this->loadedPerRepo[$repoIndex] ?? []);
 
                 foreach ($result['namesFound'] as $name) {
